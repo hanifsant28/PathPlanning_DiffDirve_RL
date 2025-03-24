@@ -9,10 +9,8 @@ from torch.utils.data.dataset import IterableDataset
 from torch.optim import AdamW
 
 class NAF_DQNN(nn.Module):
-    def __init__(self, hidden_size, action_size, state_size, lidar_size, lidar_batch_num, max_action, device):
+    def __init__(self, hidden_size, action_size, state_size, max_action, device):
         super().__init__()
-        self.lidar_size = lidar_size
-        self.lidar_batch_num = lidar_batch_num
         self.device = device
 
         self.action_dims = action_size
@@ -20,28 +18,31 @@ class NAF_DQNN(nn.Module):
         
         # base network
         self.net = nn.Sequential(
-            nn.Linear(state_size + lidar_batch_num, hidden_size),
+            nn.Linear(state_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
         ).to(self.device)  # Ensure the network is on the correct device
 
         # action policy
-        self.linear_mu = nn.Linear(hidden_size, action_size).to(self.device)  # Ensure the layer is on the correct device
+        self.linear_mu = nn.Sequential(nn.Linear(hidden_size, hidden_size),
+                                       nn.ReLU(),
+                                       nn.Linear(hidden_size, action_size)).to(self.device)  # Ensure the layer is on the correct device
 
         # state value
-        self.linear_value = nn.Linear(hidden_size, 1).to(self.device)  # Ensure the layer is on the correct device
+        self.linear_value = nn.Sequential(nn.Linear(hidden_size, hidden_size),
+                                       nn.ReLU(),
+                                       nn.Linear(hidden_size, 1)).to(self.device)  # Ensure the layer is on the correct device
 
         # L matrix
-        self.linear_matrix = nn.Linear(hidden_size, int(action_size * (action_size + 1) / 2)).to(self.device)  # Ensure the layer is on the correct device
+        self.linear_matrix = nn.Sequential(nn.Linear(hidden_size, hidden_size),
+                                        nn.ReLU(),
+                                        nn.Linear(hidden_size, int(action_size * (action_size + 1) / 2))).to(self.device)  # Ensure the layer is on the correct device
 
     @torch.no_grad()
     def mu(self, input):
-        x, lidar = input
-        
-        nn_lidar = self.preprocess_lidar(lidar)
-        x = torch.cat((x, nn_lidar), dim=-1)  # Concatenate along the last dimension
-        
+        x = input
         x = x.to(self.device)  # Ensure x is on the correct device
         x = self.net(x)
         x = self.linear_mu(x)
@@ -50,46 +51,15 @@ class NAF_DQNN(nn.Module):
 
     @torch.no_grad()
     def value(self, input):
-        x, lidar = input
-        
-        nn_lidar = self.preprocess_lidar(lidar)
-        x = torch.cat((x, nn_lidar), dim=-1)  # Concatenate along the last dimension
-        
+        x = input
         x = x.to(self.device)  # Ensure x is on the correct device
         x = self.net(x)
         x = self.linear_value(x)
         return x
 
-    def preprocess_lidar(self, lidar_data):
-        if lidar_data.dim() == 1:
-            lidar_data = lidar_data.unsqueeze(0)  # Add batch dimension if missing
-
-        lidar_data = lidar_data.to(self.device)  # Ensure lidar_data is on the correct device
-
-        data_length = int(self.lidar_size / self.lidar_batch_num)
-        nn_data = []
-
-        for i in range(self.lidar_batch_num):
-            if i + 1 == self.lidar_batch_num:
-                # If it is the last batch, take all the rest of the rays into the same batch
-                batch_segment = lidar_data[:, i * data_length:]
-            else:
-                batch_segment = lidar_data[:, i * data_length : (i + 1) * data_length]
-            
-            # Find the minimum value in each segment
-            min_values = torch.min(batch_segment, dim=1).values
-            nn_data.append(min_values)
-
-        # Stack the minimum values to form a tensor of shape [batch_size, lidar_batch_num]
-        nn_data = torch.stack(nn_data, dim=1).to(self.device)
-        return nn_data
 
     def forward(self, input, a):
-        x, lidar = input
-        
-        nn_lidar = self.preprocess_lidar(lidar)
-        x = torch.cat((x, nn_lidar), dim=-1)  # Concatenate along the last dimension
-        
+        x = input
         x = x.to(self.device)  # Ensure x is on the correct device
         x = self.net(x)
         mu = torch.tanh(self.linear_mu(x)) * self.max_action
@@ -110,9 +80,10 @@ class NAF_DQNN(nn.Module):
         adv = adv.squeeze(dim=-1)
         return value + adv
 
-def noisy_policy(state, net, epsilon, device):
+
+def noisy_policy(state, net, epsilon, device, max_speed):
     amin = torch.tensor([0, 0], dtype=torch.float32).to(device)
-    amax = torch.tensor([1, 1], dtype=torch.float32).to(device)
+    amax = torch.tensor([max_speed, max_speed], dtype=torch.float32).to(device)
 
     mu = net.mu(state)
     mu = mu + torch.normal(0, epsilon, mu.shape).to(device)
