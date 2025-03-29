@@ -23,6 +23,8 @@ class NAF_DQNN(nn.Module):
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
         ).to(self.device)  # Ensure the network is on the correct device
 
         # action policy
@@ -73,8 +75,8 @@ class NAF_DQNN(nn.Module):
         L[:, tril_indices[0], tril_indices[1]] = matrix
         P = L @ L.transpose(2, 1)
 
-        u_mu = (a - mu).unsqueeze(dim=1).to(self.device)
-        u_mu_t = u_mu.transpose(1, 2).to(self.device)
+        u_mu = (a - mu).unsqueeze(dim=1).to(self.device).float()
+        u_mu_t = u_mu.transpose(1, 2).to(self.device).float()
 
         adv = -0.5 * u_mu @ P @ u_mu_t
         adv = adv.squeeze(dim=-1)
@@ -82,8 +84,8 @@ class NAF_DQNN(nn.Module):
 
 
 def noisy_policy(state, net, epsilon, device, max_speed):
-    amin = torch.tensor([0, 0], dtype=torch.float32).to(device)
-    amax = torch.tensor([max_speed, max_speed], dtype=torch.float32).to(device)
+    amin = torch.tensor([-max_speed[0], -max_speed[1]], dtype=torch.float32).to(device)
+    amax = torch.tensor(max_speed, dtype=torch.float32).to(device)
 
     mu = net.mu(state)
     mu = mu + torch.normal(0, epsilon, mu.shape).to(device)

@@ -19,7 +19,8 @@ class NAF_Trainning:
                  epsilon_max,
                  epsilon_min,
                  policy,
-                 num_episodes):
+                 num_episodes,
+                 explor_ratio):
         
         self.model = model
         self.target_model = copy.deepcopy(model)
@@ -39,6 +40,7 @@ class NAF_Trainning:
 
         self.total_reward = 0
         self.return_each_episode = []
+        self.explore_ratio = explor_ratio
 
     def collect_experience(self):
         """
@@ -106,7 +108,7 @@ class NAF_Trainning:
         """
         Function to update the value of epsilon for exploration policy.
         """
-        self.epsilon = max(self.epsilon_min, self.epsilon_max * (1 - episode / (0.5* self.num_episodes)) + self.epsilon_min * (episode / (0.5* self.num_episodes)))
+        self.epsilon = max(self.epsilon_min, self.epsilon_max - (self.epsilon_max-self.epsilon_min)*(episode/(self.num_episodes*self.explore_ratio)))
 
     
     def train(self):
@@ -185,7 +187,7 @@ def load_model( model,filepath,device):
     return model
 
 
-def load_barriers(filepath="barriers.csv"):
+def load_barriers(filepath="Model/barrier.csv"):
     """
     Function to load the barrier position to be used for testing.
 

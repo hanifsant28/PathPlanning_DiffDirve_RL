@@ -130,7 +130,10 @@ class environment:
         #for debuggin purpose
         self.proximity_penalty = 0
         self.moving_penalty = 0
+        self.angle_reward = 0
         self.position_reward = 0
+        
+        self.target_angle = 0
 
 
 
@@ -152,8 +155,8 @@ class environment:
 
         """
 
-        x = x0 + xR*np.cos(theta) - yR*np.sin(theta)
-        y = y0 + xR*np.sin(theta) + yR*np.cos(theta)
+        x = x0 + xR*np.cos(theta) - yR*np.sin(-theta)
+        y = y0 + xR*np.sin(-theta) + yR*np.cos(theta)
 
         return [x,y]
 
@@ -411,7 +414,7 @@ class environment:
             - bool: True if there is an intersection, False otherwise
         """
         x1, y1 = robot_start
-        dx = robot_start[0] - robot_end[0]
+        dx = robot_end[0] - robot_start[0]
         dy = robot_end[1] - robot_start[1]
 
         a = dx**2 + dy**2
@@ -538,8 +541,6 @@ class environment:
                 self.collide = self.check_circle_collision(sideWR[0],sideWR[1],barrier,radius)
 
 
-
-
     def check_finsih(self):
         """
         Check whether part of the robot already cross finsih line
@@ -595,25 +596,44 @@ class environment:
         proximity_penalty = 0
         ray_length = self.lidar_range
         
-        for read in self.lidar_dis_read:
-            proximity_penalty -= ((ray_length - read)/ray_length)*(1/self.lidar_batch_num)
+        for read in self.lidar_dis_min:
+            proximity_penalty += (1 - ((ray_length - read)/ray_length))*(1/self.lidar_batch_num)
             
 
-        max_linear_velocity = self.max_speed*self.wheel_length/2
+        max_linear_velocity = self.max_speed[0]
         current_distance = np.sqrt((self.x_real - self.target_pos[0])**2 + (self.y_real - self.target_pos[1])**2)
         dDistance = prev_distance - current_distance
         running_penalty = dDistance/(max_linear_velocity*self.dt*self.step_num)
 
-        
-        self.moving_penalty = running_penalty
+        dis_x = self.target_pos[0] - self.x_real
+        dis_y = self.target_pos[1] - self.y_real
+        target_angle = np.arctan2(dis_x,dis_y)
+
+        if target_angle < 0:
+            target_angle = 2*np.pi + target_angle
+
+        self.target_angle = target_angle
+
+        diff = abs(self.theta_read - target_angle)
+        if diff>np.pi:
+            diff = 2*np.pi - diff
+
+        reward_angle = 1 - diff/np.pi
+
+        if running_penalty == 0:
+            reward_angle = 0
+            proximity_penalty = 0
+
         self.proximity_penalty = proximity_penalty
+        self.moving_penalty = running_penalty
+        self.angle_reward = reward_angle
 
         if self.collide:
             reward =  -5
             self.position_reward = reward
 
         else:
-            reward = 3*proximity_penalty + 7*running_penalty
+            reward = 1.5*proximity_penalty + 5*running_penalty + 3.5*self.angle_reward
             self.position_reward = reward
         
         return  reward
@@ -677,7 +697,7 @@ class environment:
 
 
 
-    def step(self,wL, wR, user_test=False):
+    def step(self,v, dTheta, user_test=False):
         """
         Function compute the next state of the robot
         
@@ -695,6 +715,7 @@ class environment:
             i = 0
             prev_distance = np.sqrt((self.x_real - self.target_pos[0])**2 + (self.y_real - self.target_pos[1])**2)
             while i<self.step_num:
+                wL,wR = self.my_robot.inverse_kinematic(v, dTheta)
                 self.my_robot.computeKinematic(wR,wL)
                 self.time_passed = self.time_passed + self.dt
                 #positon and state of robot based on the reading from the robot model
@@ -711,12 +732,12 @@ class environment:
                 self.calc_lidar_distance()
                 self.divided_lidar_batch()
 
-                if not user_test:
+                # if not user_test:
                     #check distance of LIDAR,collision, and whether the robot already touch finsih line
-                    self.robot_collision_check()
-                    self.wheel_collision_check()
-                    self.check_timeout()
-                    self.check_finsih()
+                self.robot_collision_check()
+                self.wheel_collision_check()
+                self.check_timeout()
+                self.check_finsih()
 
                 if self.collide or self.reach_finish or self.time_out:
                     break
@@ -728,7 +749,8 @@ class environment:
             if self.collide or self.reach_finish or self.time_out:
                 self.episode_end = True
 
-            returned_obs = [self.x_read,self.y_read,self.theta_read,self.dx_read,self.dy_read,self.dTheta_read,self.time_passed] + self.lidar_dis_min
+            lidar_return = [x/self.lidar_range for x in self.lidar_dis_min]
+            returned_obs = [self.x_read,self.y_read,self.theta_read,self.dx_read,self.dy_read,self.dTheta_read,self.time_passed] + lidar_return
             
             returned_values = [returned_obs,reward,self.episode_end]
 
@@ -736,7 +758,8 @@ class environment:
         
         else:
             reward = 0.0
-            returned_obs = [self.x_read,self.y_read,self.theta_read,self.dx_read,self.dy_read,self.dTheta_read,self.time_passed] + self.lidar_dis_min
+            lidar_return = [x/self.lidar_range for x in self.lidar_dis_min]
+            returned_obs = [self.x_read,self.y_read,self.theta_read,self.dx_read,self.dy_read,self.dTheta_read,self.time_passed] + lidar_return
             
             
             returned_values = [returned_obs,reward,self.episode_end]
@@ -825,7 +848,7 @@ class environment:
 
 
          # Variables to control robot speed
-        wL, wR = 0.0, 0.0  # Left and right wheel speeds
+        v, dTheta = 0.0, 0.0  # Left and right wheel speeds
         key_pressed = False
         reward_total = 0
 
@@ -838,7 +861,9 @@ class environment:
         text_proximty_penalty = ax.text(0.02, 0.70, '', transform=ax.transAxes, fontsize=10, color='black')
         text_moving_penalty = ax.text(0.02, 0.65, '', transform=ax.transAxes, fontsize=10, color='black')
         text_position_reward = ax.text(0.02, 0.60, '', transform=ax.transAxes, fontsize=10, color='black')
-        text_reward_total = ax.text(0.02, 0.55, '', transform=ax.transAxes, fontsize=10, color='black')
+        text_angle_reward = ax.text(0.02, 0.55, '', transform=ax.transAxes, fontsize=10, color='black')
+        text_reward_total = ax.text(0.02, 0.50, '', transform=ax.transAxes, fontsize=10, color='black')
+        text_target_angle = ax.text(0.02, 0.45, '', transform=ax.transAxes, fontsize=10, color='black')
 
 
         def update_plot(frame):
@@ -846,12 +871,12 @@ class environment:
             Update the robot, wheel, and LIDAR positions on the plot.
             """
             # Perform a simulation step with the current wheel speeds
-            nonlocal wL, wR, key_pressed, reward_total
+            nonlocal v, dTheta, key_pressed, reward_total
 
             if not key_pressed:
-                wL, wR = 0.0, 0.0
+                v, dTheta = 0.0, 0.0
 
-            returns = self.step(wL, wR, user_test=True)
+            returns = self.step(v, dTheta, user_test=True)
             reward_total += returns[1]
 
 
@@ -878,37 +903,66 @@ class environment:
             text_y_read.set_text(f"y_read: {self.y_read:.2f}")
             text_proximty_penalty.set_text(f"Proximity Penalty: {self.proximity_penalty:.2f}")
             text_moving_penalty.set_text(f"Moving Penalty: {self.moving_penalty:.2f}")
-            text_position_reward.set_text(f"Position Reward: {self.position_reward:.2f}")
+            text_position_reward.set_text(f"Angle Reward: {self.angle_reward:.2f}")
+            text_angle_reward.set_text(f"Position Reward: {self.position_reward:.2f}")
             text_reward_total.set_text(f"Total Reward: {reward_total:.2f}")
+            text_target_angle.set_text(f"Target Angle: {np.rad2deg(self.target_angle):.2f}°")
 
             texts = [text_x_real, text_y_real, text_theta_read, text_x_read, text_y_read, text_proximty_penalty, 
-                     text_moving_penalty, text_position_reward, text_reward_total]
+                     text_moving_penalty, text_position_reward, text_angle_reward, text_reward_total, text_target_angle]
             
             return [robot_patch, wheelL_patch, wheelR_patch] + lidar_lines + texts
 
+        pressed_keys = set()  # Set to track pressed keys
+        
         def on_key(event):
             """
             Handle keyboard input to control the robot.
             """
-            nonlocal wL, wR, key_pressed
+            nonlocal v, dTheta, key_pressed
+
+            if event.name == 'key_press_event':  # Key pressed
+                pressed_keys.add(event.key)
+            elif event.name == 'key_release_event':  # Key released
+                pressed_keys.discard(event.key)
 
             key_pressed = True
 
-            if event.key == 'up':  # Move forward
-                wL = self.max_speed
-                wR = self.max_speed
-            elif event.key == 'down':  # Move backward
-                wL = -self.max_speed
-                wR = -self.max_speed
-            elif event.key == 'left':  # Turn left
-                wL = -self.max_speed
-                wR = self.max_speed
-            elif event.key == 'right':  # Turn right
-                wL = self.max_speed
-                wR = -self.max_speed
+            if 'up' in pressed_keys and 'left' in pressed_keys:  # Both up and left pressed
+                v = self.max_speed[0] / 2  # Move forward at half speed
+                dTheta = -self.max_speed[1] / 2  # Turn left at half speed
+            
+            elif 'up' in pressed_keys and 'right' in pressed_keys:  # Both up and left pressed
+                v = self.max_speed[0] / 2  # Move forward at half speed
+                dTheta = self.max_speed[1] / 2  # Turn left at half speed
+            
+            elif 'down' in pressed_keys and 'left' in pressed_keys:  # Both up and left pressed
+                v = -self.max_speed[0] / 2  # Move forward at half speed
+                dTheta = -self.max_speed[1] / 2  # Turn left at half speed
+            
+            elif 'down' in pressed_keys and 'right' in pressed_keys:  # Both up and left pressed
+                v = -self.max_speed[0] / 2  # Move forward at half speed
+                dTheta = self.max_speed[1] / 2  # Turn left at half speed
+
+            elif 'up' in pressed_keys:  # Only up pressed
+                v = self.max_speed[0]
+                dTheta = 0
+            elif 'down' in pressed_keys:  # Only down pressed
+                v = -self.max_speed[0]
+                dTheta = 0
+            elif 'left' in pressed_keys:  # Only left pressed
+                v = 0
+                dTheta = -self.max_speed[1]
+            elif 'right' in pressed_keys:  # Only right pressed
+                v = 0
+                dTheta = self.max_speed[1]
+            else:  # No keys pressed
+                v = 0
+                dTheta = 0
     
         # Connect the key press event to the handler
         fig.canvas.mpl_connect('key_press_event', on_key)
+        fig.canvas.mpl_connect('key_release_event', on_key)
 
         # Create the animation
         ani = animation.FuncAnimation(fig, update_plot, frames=None, interval=10, blit=True)
