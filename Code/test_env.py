@@ -1,34 +1,33 @@
 from environment import environment
 from NAF_architecture import NAF_DQNN, noisy_policy
 import torch
-
+import numpy as np
+from train_algorithm import load_barriers, load_model
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+model_filepath = "Model/final_model.pth"
 
-my_environment = environment(lane_num=5, screen_width=500, screen_height=1000,
-                             arena_width=2, robot_width=0.15, robot_length=0.3, num_lidarRay= 120, 
-                             num_lidarBatch=4, min_dBarrier=0.3*1.75, max_dBarrier=0.3*2.5, max_speed=1,max_time=35, dt=0.01, step_num=3)
+target_pos = [2.5, 2.5]
+robot_pos = [0.75, 0.75]
+max_speed = [0.3, np.deg2rad(90)]
 
-my_model = NAF_DQNN(hidden_size=256, action_size=2, state_size=7, lidar_size=120, 
-                 lidar_batch_num=4, max_action=[1, 1], device=device)
+model = NAF_DQNN(hidden_size=400, action_size=2, state_size=11, max_action=max_speed, device=device)
+barrier_pos,barrier_radius = load_barriers()
+model = load_model(model=model,filepath=model_filepath,device=device)
 
-
-policy = noisy_policy
+my_environment = environment(arena_width=3, arena_length=3, robot_width=0.15, robot_length=0.3, robot_pos=robot_pos, 
+                             barrier_pos=barrier_pos, barrier_radius=barrier_radius, target_pos=target_pos, num_lidarRay=120,
+                             num_lidarBatch=4, lidar_range= 0.45, max_speed=max_speed, max_time=120, dt=0.01, step_num=3)
 
 my_environment.test_arena()
-
-my_model.load_state_dict(torch.load("final_model.pth"))
-my_model.to(device)
-
 total_reward = 0
-state,lidar = my_environment.reset_env()
-done = False
 
+state = my_environment.reset_env()
+done = False
 while not done:
     state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(device)
-    lidar_tensor = torch.tensor(lidar, dtype=torch.float32).unsqueeze(0).to(device)
-    action = policy((state_tensor, lidar_tensor), my_model, 0.001,device)
-    next_state, next_lidar, reward, done = my_environment.step(action[0],action[1])
+    action = noisy_policy(state=state_tensor,net=model,epsilon=0.001,device=device,max_speed=max_speed)
+    next_state, reward, done = my_environment.step(action[0],action[1])
 
     total_reward += reward
 
@@ -36,7 +35,21 @@ while not done:
 
     
     state = next_state
-    lidar = next_lidar
 
 print("start replay")
 my_environment.run_replay()
+
+
+# barrier_pos = [[1.25,2.25],[2,1.25]]
+# barrier_radius = [0.25, 0.25]
+# target_pos = [2.5, 2.5]
+# robot_pos = [0.75, 0.75]
+# max_speed = [0.3, np.deg2rad(100)]
+
+# my_environment = environment(arena_width=3, arena_length=3, robot_width=0.15, robot_length=0.3, robot_pos=robot_pos, 
+#                              barrier_pos=barrier_pos, barrier_radius=barrier_radius, target_pos=target_pos, num_lidarRay=180,
+#                              num_lidarBatch=10, lidar_range= 0.45, max_speed=max_speed, max_time=60, dt=0.01, step_num=3)
+
+# my_environment.reset_env()
+# my_environment.test_arena()
+# my_environment.user_control()

@@ -5,6 +5,7 @@ import random
 import copy
 from tqdm import tqdm
 import csv
+import matplotlib.pyplot as plt
 
 
 class NAF_Trainning:
@@ -18,7 +19,8 @@ class NAF_Trainning:
                  epsilon_max,
                  epsilon_min,
                  policy,
-                 num_episodes):
+                 num_episodes,
+                 explor_ratio):
         
         self.model = model
         self.target_model = copy.deepcopy(model)
@@ -38,27 +40,28 @@ class NAF_Trainning:
 
         self.total_reward = 0
         self.return_each_episode = []
+        self.explore_ratio = explor_ratio
 
     def collect_experience(self):
+        """
+        Function to collect experiences.
+        """
         self.total_reward = 0
-        state,lidar = self.env.reset_env()
+        state = self.env.reset_env()
         done = False
 
         while not done:
             state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
-            lidar_tensor = torch.tensor(lidar, dtype=torch.float32).unsqueeze(0).to(self.device)
-            action = self.policy((state_tensor, lidar_tensor), self.model, self.epsilon,self.device)
-            next_state, next_lidar, reward, done = self.env.step(action[0],action[1])
-
-            
+            action = self.policy(state_tensor, self.model, self.epsilon,self.device, self.env.max_speed)
+            next_state, reward, done = self.env.step(action[0],action[1])
 
             #store the result in bufffer
-            self.buffer.append([state, lidar, action, reward, next_state, next_lidar, done])
+            self.buffer.append([state, action, reward, next_state, done])
             
             self.total_reward += reward
-            print(f"\rtotal reward: {self.total_reward}; time passed: {self.env.time_passed} ", end="", flush=True)
+            print(f"\rY Pos: {self.env.y_real}; X Pos: {self.env.x_real}; total reward: {self.total_reward}; time passed: {self.env.time_passed} ", end="", flush=True)
             state = next_state
-            lidar = next_lidar
+
 
             if len(self.buffer) > self.buffer_size:
                 self.buffer.pop(0)
@@ -66,24 +69,26 @@ class NAF_Trainning:
             if len(self.buffer) > self.batch_size:
                 self.update_network()
 
+    
     def update_network(self):
+        """
+        Function to update the neural network if the buffer already more than the batch size.
+        """
         batch = random.sample(self.buffer, self.batch_size)
-        states, lidars, actions, rewards, next_states, next_lidars, dones = zip(*batch)
+        states, actions, rewards, next_states, dones = zip(*batch)
 
         states = torch.tensor(states, dtype=torch.float32).to(self.device)
-        lidars = torch.tensor(lidars, dtype=torch.float32).to(self.device)
         actions = torch.tensor(actions, dtype=torch.float32).to(self.device)
         rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
         next_states = torch.tensor(next_states, dtype=torch.float32).to(self.device)
-        next_lidars = torch.tensor(next_lidars, dtype=torch.float32).to(self.device)
         dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
 
         # Compute the target value
-        next_values = self.target_model.value((next_states, next_lidars)).squeeze()
+        next_values = self.target_model.value((next_states)).squeeze()
         target = rewards + (1 - dones) * self.gamma * next_values
 
         # compute the current values
-        values = self.model.forward((states, lidars),actions).squeeze()
+        values = self.model.forward(states,actions).squeeze()
 
         loss = torch.nn.functional.mse_loss(values, target)
         self.optimizer.zero_grad()
@@ -92,43 +97,113 @@ class NAF_Trainning:
 
     
     def polyak_update(self):
+        """
+        Function to do polyak update so that it is more stable.
+        """
         for target_param, online_param in zip(self.target_model.parameters(), self.model.parameters()):
             target_param.data.copy_(self.tau * online_param.data + (1 - self.tau) * target_param.data)
 
     
     def update_epsilon(self, episode):
-        self.epsilon = max(self.epsilon_min, self.epsilon_max * (1 - episode / (0.5* self.num_episodes)) + self.epsilon_min)
+        """
+        Function to update the value of epsilon for exploration policy.
+        """
+        self.epsilon = max(self.epsilon_min, self.epsilon_max - (self.epsilon_max-self.epsilon_min)*(episode/(self.num_episodes*self.explore_ratio)))
 
     
     def train(self):
+        """
+        Main function for trainning the model.
+        """
+        self.return_each_episode = []
         for episode in tqdm(range(self.num_episodes)):
             self.collect_experience()
             self.update_epsilon(episode)
             self.polyak_update()
             self.return_each_episode.append(self.total_reward)
 
-        # # Save the final model and metrics
-        # self.save_model("final_model.pth")
-        # self.save_metrics("training_metrics.csv")
-
 
     def test_arena(self):
+        """
+        Function to show the arena used for trainning
+        """
         self.env.test_arena()
     
+
     def run_replay_last_episode(self):
+        """
+        Running the last episode replay of the trainning
+        """
         self.env.run_replay()
 
+
     def save_model(self, filepath):
+        """
+        Function to save the Model parameters.
+        """
         torch.save(self.model.state_dict(), filepath)
 
-    def load_model(self, filepath):
-        self.model.load_state_dict(torch.load(filepath))
-        self.model.to(self.device)
 
-    def save_metrics(self, filepath):
+    def save_barriers(self, filepath="barriers.csv"):
+        """
+        Function to save the barrier position to be used for testing.
+        """
         with open(filepath, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(["Episode", "Total Reward"])
-            for episode, reward in enumerate(self.return_each_episode):
-                writer.writerow([episode, reward])
-            
+            for pos, radius in zip(self.env.barrier_pos,self.env.barrier_radius):
+                writer.writerow([pos[0], pos[1], radius])
+
+
+    def plot_return(self):
+        """
+        Function to plot the graphic of return each episode
+        """
+        plt.figure(figsize=(10, 5))
+        plt.plot(self.return_each_episode, label='Return per Episode')
+        plt.xlabel('Episode')
+        plt.ylabel('Return')
+        plt.title('Return per Episode')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
+
+
+
+def load_model( model,filepath,device):
+    """
+    Function to load the model
+
+    Parameters:
+        - filepath (string): Desired directory.
+        - device  (string): Desired device for processing the model.
+    
+    Returns:
+        - model : The loaded model
+    """
+
+    model.load_state_dict(torch.load(filepath))
+    model.to(device)
+    return model
+
+
+def load_barriers(filepath="Model/barrier.csv"):
+    """
+    Function to load the barrier position to be used for testing.
+
+    Parameters:
+        - filepath (string): Desired directory.
+
+    Returns:
+        - barrier_pos_pair (array of float): Array of the posiiton pair of the barrier.
+    """
+    pos = []
+    radius = []
+    with open(filepath, 'r') as csvfile:
+        reader = csv.reader(csvfile)
+        for row in reader:
+            coor = [float(row[0]),float(row[1])]
+            pos.append(coor)
+            radius.append(float(row[2]))
+
+    return [pos,radius]

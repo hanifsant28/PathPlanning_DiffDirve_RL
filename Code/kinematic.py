@@ -28,24 +28,35 @@ class DifDriveKinematic:
         self.y = 0
 
         self.dt = dt
+        self.rotated = 0
 
 
     def computeKinematic(self,wR,wL):
         
-            # Compute angular velocity
-        self.dTheta = (self.wheel_radius / self.wheel_base) * (wR - wL)
+        # Compute angular velocity
+        self.dTheta = (self.wheel_radius / self.wheel_base) * (wL - wR)
 
         # Compute forward velocity
         v = (self.wheel_radius / 2) * (wR + wL)
 
         # Compute linear velocity in global frame
-        self.dx = v * np.sin(-self.theta)
-        self.dy = v * np.cos(-self.theta)
+        self.dx = v * np.sin(self.theta)
+        self.dy = v * np.cos(self.theta)
 
         # Update position and orientation
         self.x += self.dx * self.dt
         self.y += self.dy * self.dt
         self.theta += self.dTheta * self.dt  # Apply dt here for correct integration
+
+        if self.theta > 2*np.pi:
+            self.theta = self.theta - 2*np.pi
+        
+        elif self.theta < 0:
+            self.theta = self.theta + 2*np.pi
+
+       
+
+
 
     
     def get_state(self):
@@ -86,3 +97,15 @@ class DifDriveKinematic:
         self.y = 0
 
         
+    def inverse_kinematic(self, v, dTheta):
+        """
+        Function to calculate inverse kinematic
+        """
+
+        A = self.wheel_radius/self.wheel_base
+        B = self.wheel_radius/2
+
+        wL = (v*A + dTheta*B)/(2*A*B)
+        wR = (v*A - dTheta*B)/(2*A*B)
+
+        return [wL, wR]
