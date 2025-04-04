@@ -144,7 +144,7 @@ class NAF_Trainning:
         torch.save(self.model.state_dict(), filepath)
 
 
-    def save_barriers(self, filepath="barriers.csv"):
+    def save_barriers(self, filepath="Model/arena.csv"):
         """
         Function to save the barrier position to be used for testing.
         """
@@ -152,6 +152,11 @@ class NAF_Trainning:
             writer = csv.writer(csvfile)
             for pos, radius in zip(self.env.barrier_pos,self.env.barrier_radius):
                 writer.writerow([pos[0], pos[1], radius])
+            
+            writer.writerow(["-","-","-"])
+            writer.writerow([self.env.start_x,self.env.start_y,
+                             self.env.target_pos[0],self.env.target_pos[1],
+                             self.env.arena_width, self.env.arena_length])
 
 
     def plot_return(self):
@@ -187,7 +192,7 @@ def load_model( model,filepath,device):
     return model
 
 
-def load_barriers(filepath="Model/barrier.csv"):
+def load_barriers(filepath="Model/arena.csv"):
     """
     Function to load the barrier position to be used for testing.
 
@@ -199,11 +204,25 @@ def load_barriers(filepath="Model/barrier.csv"):
     """
     pos = []
     radius = []
+    start_pos = []
+    arena_width = 0
+    arena_length = 0
+    target_pos = []
+    done_read_barrier = False
+
     with open(filepath, 'r') as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
-            coor = [float(row[0]),float(row[1])]
-            pos.append(coor)
-            radius.append(float(row[2]))
+            if row[0] == "-":
+                done_read_barrier = True
+            elif done_read_barrier == False:
+                coor = [float(row[0]),float(row[1])]
+                pos.append(coor)
+                radius.append(float(row[2]))
+            elif done_read_barrier:
+                start_pos = [float(row[0]), float(row[1])]
+                target_pos = [float(row[2]), float(row[3])]
+                arena_width = float(row[4])
+                arena_length = float(row[5])
 
-    return [pos,radius]
+    return [pos,radius,start_pos,target_pos,arena_width,arena_length]
