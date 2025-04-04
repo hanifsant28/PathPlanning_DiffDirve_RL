@@ -595,10 +595,15 @@ class environment:
         
         proximity_penalty = 0
         ray_length = self.lidar_range
+        sum_read = 0
         
-        for read in self.lidar_dis_min:
-            proximity_penalty += (1 - ((ray_length - read)/ray_length))*(1/self.lidar_batch_num)
+        for read in self.lidar_dis_read:
+            # proximity_penalty -= (((ray_length - read)/ray_length))*(1/self.lidar_batch_num)
+            sum_read += read
             
+        avg_read = sum_read/len(self.lidar_dis_read)
+        proximity_penalty = -(ray_length - avg_read)/(0.5*ray_length)
+
 
         max_linear_velocity = self.max_speed[0]
         current_distance = np.sqrt((self.x_real - self.target_pos[0])**2 + (self.y_real - self.target_pos[1])**2)
@@ -632,8 +637,17 @@ class environment:
             reward =  -5
             self.position_reward = reward
 
+        if self.reach_finish:
+            reward = 15
+            self.position_reward = reward
+
+        elif proximity_penalty<-0.1:
+            reward = 6.5*proximity_penalty + 3.5*running_penalty + 0.0*self.angle_reward
+            self.position_reward = reward
+
+
         else:
-            reward = 1.5*proximity_penalty + 5*running_penalty + 3.5*self.angle_reward
+            reward = 0*proximity_penalty + 5*running_penalty + 5*self.angle_reward
             self.position_reward = reward
         
         return  reward
@@ -691,7 +705,9 @@ class environment:
         self.calc_lidar_distance()
         self.divided_lidar_batch()
 
-        returned_obs = [self.x_read,self.y_read,self.theta_read,self.dx_read,self.dy_read,self.dTheta_read,self.time_passed] + self.lidar_dis_min
+        lidar_return = [x/self.lidar_range for x in self.lidar_dis_min]
+        returned_obs = [self.x_read,self.y_read,self.theta_read,self.dx_read,self.dy_read,self.dTheta_read,
+                            self.target_pos[0],self.target_pos[1]] + lidar_return
         
         return returned_obs
 
@@ -750,7 +766,8 @@ class environment:
                 self.episode_end = True
 
             lidar_return = [x/self.lidar_range for x in self.lidar_dis_min]
-            returned_obs = [self.x_read,self.y_read,self.theta_read,self.dx_read,self.dy_read,self.dTheta_read,self.time_passed] + lidar_return
+            returned_obs = [self.x_read,self.y_read,self.theta_read,self.dx_read,self.dy_read,self.dTheta_read,
+                            self.target_pos[0],self.target_pos[1]] + lidar_return
             
             returned_values = [returned_obs,reward,self.episode_end]
 
@@ -759,8 +776,8 @@ class environment:
         else:
             reward = 0.0
             lidar_return = [x/self.lidar_range for x in self.lidar_dis_min]
-            returned_obs = [self.x_read,self.y_read,self.theta_read,self.dx_read,self.dy_read,self.dTheta_read,self.time_passed] + lidar_return
-            
+            returned_obs = [self.x_read,self.y_read,self.theta_read,self.dx_read,self.dy_read,self.dTheta_read,
+                            self.target_pos[0],self.target_pos[1]] + lidar_return
             
             returned_values = [returned_obs,reward,self.episode_end]
 
